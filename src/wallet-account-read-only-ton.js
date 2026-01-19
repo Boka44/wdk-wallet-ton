@@ -81,14 +81,6 @@ export default class WalletAccountReadOnlyTon extends WalletAccountReadOnly {
     this._config = config
 
     /**
-     * The account's public key.
-     *
-     * @protected
-     * @type {Uint8Array}
-     */
-    this._publicKey = publicKey
-
-    /**
      * The v5r1 wallet.
      *
      * @protected
@@ -129,7 +121,7 @@ export default class WalletAccountReadOnlyTon extends WalletAccountReadOnly {
   async verify (message, signature) {
     const _message = Buffer.from(message)
     const _signature = Buffer.from(signature, 'hex')
-    return signVerify(_message, _signature, this._publicKey)
+    return signVerify(_message, _signature, this._wallet.publicKey)
   }
 
   /**
