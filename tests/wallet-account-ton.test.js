@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals'
 
-import { Address, beginCell, fromNano, internal, SendMode } from '@ton/ton'
+import { Address, beginCell, fromNano, internal, SendMode, TupleReader } from '@ton/ton'
 import { signVerify } from '@ton/crypto'
 import { JettonMinter } from '@ton-community/assets-sdk'
 
@@ -577,6 +577,66 @@ describe('WalletAccountTon', () => {
       expect(fee).toBe(ACTIVE_ACCOUNT_FEE)
     })
 
+    describe('when the jetton master reports a jetton wallet that is not the account\'s', () => {
+      const TRANSFER = () => ({
+        token: testToken.address.toString(),
+        recipient: RECIPIENT.address,
+        amount: 1_000
+      })
+
+      function reportJettonWallet (address) {
+        const runMethod = tonClient.runMethod.bind(tonClient)
+
+        jest.spyOn(tonClient, 'runMethod').mockImplementation(async (target, name, stack) => {
+          if (name === 'get_wallet_address') {
+            return { stack: new TupleReader([{ type: 'slice', cell: beginCell().storeAddress(address).endCell() }]) }
+          }
+
+          return runMethod(target, name, stack)
+        })
+      }
+
+      async function deployOtherToken () {
+        const otherToken = blockchain.openContract(JettonMinter.createFromConfig({
+          admin: treasury.address,
+          content: beginCell().storeStringTail('OtherToken').endCell()
+        }))
+
+        await otherToken.sendDeploy(treasury.getSender())
+
+        return otherToken
+      }
+
+      test.each([
+        ['an address with no contract deployed', 'The account has no jetton wallet deployed for this token.', async () => {
+          return await testToken.getWalletAddress(recipient._wallet.address)
+        }],
+        ['a contract that is not a jetton wallet', 'The jetton master returned an invalid jetton wallet address.', async () => {
+          return account._wallet.address
+        }],
+        ['the jetton wallet of another account', 'The jetton master returned an invalid jetton wallet address.', async () => {
+          await sendTestTokensTo(RECIPIENT.address, INITIAL_TOKEN_BALANCE)
+
+          return await testToken.getWalletAddress(recipient._wallet.address)
+        }],
+        ['the account\'s jetton wallet of another token', 'The jetton master returned an invalid jetton wallet address.', async () => {
+          const otherToken = await deployOtherToken()
+
+          await otherToken.sendMint(treasury.getSender(), account._wallet.address, INITIAL_TOKEN_BALANCE)
+
+          return await otherToken.getWalletAddress(account._wallet.address)
+        }]
+      ])('should not transfer to %s', async (_, message, getReportedAddress) => {
+        reportJettonWallet(await getReportedAddress())
+
+        const transactionsCount = blockchain.transactions.length
+
+        await expect(account.transfer(TRANSFER())).rejects.toThrow(message)
+
+        expect(blockchain.transactions).toHaveLength(transactionsCount)
+      })
+    })
+
     test('should generate different hashes for identical token transfers (queryId ensures uniqueness)', async () => {
       const TRANSFER = {
         token: testToken.address.toString(),
@@ -589,6 +649,8 @@ describe('WalletAccountTon', () => {
         calculateQueryId(0.3, 0.4),
         calculateQueryId(0.5, 0.6)
       )
+      // Keep the chain's clock on the real time: 40 years of storage fees would freeze the jetton wallet.
+      blockchain.now = Math.floor(originalDateNow() / 1000)
       global.Date.now = jest.fn(() => 3_000_000_000_000)
 
       const result1 = await account.transfer(TRANSFER)

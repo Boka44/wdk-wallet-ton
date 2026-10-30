@@ -120,11 +120,32 @@ export default class WalletAccountReadOnlyTon extends WalletAccountReadOnly {
     /**
      * Returns the jetton wallet address of the given jetton.
      *
+     * The address reported by the jetton master is checked against the chain before it is returned:
+     * the wallet must run the code the master advertises and belong to this account and to this
+     * jetton.
+     *
      * @protected
      * @param {string} tokenAddress - The jetton token address.
+     * @param {{ allowUndeployed?: boolean }} [options] - If `allowUndeployed` is set, an address with no contract deployed is returned without being checked (the account has never held this jetton).
      * @returns {Promise<Address>} The jetton wallet address.
+     * @throws {Error} If the reported address is not the account's wallet for this jetton.
      */
-    protected _getJettonWalletAddress(tokenAddress: string): Promise<Address>;
+    protected _getJettonWalletAddress(tokenAddress: string, { allowUndeployed }?: {
+        allowUndeployed?: boolean;
+    }): Promise<Address>;
+    /**
+     * Checks that an address is the account's wallet for the given jetton.
+     *
+     * @protected
+     * @param {Address} tokenAddress - The jetton master address.
+     * @param {Address} jettonWalletAddress - The jetton wallet address reported by the master.
+     * @param {{ allowUndeployed: boolean }} options - See {@link _getJettonWalletAddress}.
+     * @returns {Promise<void>}
+     * @throws {Error} If the address is not the account's wallet for this jetton.
+     */
+    protected _verifyJettonWallet(tokenAddress: Address, jettonWalletAddress: Address, { allowUndeployed }: {
+        allowUndeployed: boolean;
+    }): Promise<void>;
     /**
      * Creates and returns an internal message to execute the given transaction.
      *
@@ -151,9 +172,12 @@ export default class WalletAccountReadOnlyTon extends WalletAccountReadOnly {
      *
      * @protected
      * @param {TransferOptions} options - The transfer's options.
+     * @param {{ allowUndeployed?: boolean }} [options] - See {@link _getJettonWalletAddress}. Only set for quotes.
      * @returns {Promise<MessageRelaxed>} The internal message.
      */
-    protected _getTokenTransferMessage({ token, recipient, amount }: TransferOptions): Promise<MessageRelaxed>;
+    protected _getTokenTransferMessage({ token, recipient, amount }: TransferOptions, { allowUndeployed }?: {
+        allowUndeployed?: boolean;
+    }): Promise<MessageRelaxed>;
     /**
      * Creates and returns a v5r1 transfer to execute the given message.
      *

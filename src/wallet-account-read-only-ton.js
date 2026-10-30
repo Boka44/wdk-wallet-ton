@@ -190,9 +190,9 @@ export default class WalletAccountReadOnlyTon extends WalletAccountReadOnly {
     }
 
     try {
-      const jettonWalletAddress = await this._getJettonWalletAddress(tokenAddress)
+      const jettonWalletAddress = await this._getJettonWalletAddress(tokenAddress, { allowUndeployed: true })
 
-      const { stack } = await this._tonClient.callGetMethod(jettonWalletAddress, 'get_wallet_data', [])
+      const { stack } = await this._tonClient.runMethod(jettonWalletAddress, 'get_wallet_data', [])
 
       const balance = stack.readBigNumber()
 
@@ -236,7 +236,7 @@ export default class WalletAccountReadOnlyTon extends WalletAccountReadOnly {
       throw new Error('The wallet must be connected to ton center to quote transfer operations.')
     }
 
-    const message = await this._getTokenTransferMessage(options)
+    const message = await this._getTokenTransferMessage(options, { allowUndeployed: true })
     const transfer = await this._getTransfer(message)
     const fee = await this._getTransferFee(transfer)
 
@@ -459,23 +459,76 @@ export default class WalletAccountReadOnlyTon extends WalletAccountReadOnly {
   /**
    * Returns the jetton wallet address of the given jetton.
    *
+   * The address reported by the jetton master is checked against the chain before it is returned:
+   * the wallet must run the code the master advertises and belong to this account and to this
+   * jetton.
+   *
    * @protected
    * @param {string} tokenAddress - The jetton token address.
+   * @param {{ allowUndeployed?: boolean }} [options] - If `allowUndeployed` is set, an address with no contract deployed is returned without being checked (the account has never held this jetton).
    * @returns {Promise<Address>} The jetton wallet address.
+   * @throws {Error} If the reported address is not the account's wallet for this jetton.
    */
-  async _getJettonWalletAddress (tokenAddress) {
+  async _getJettonWalletAddress (tokenAddress, { allowUndeployed = false } = {}) {
     tokenAddress = Address.parse(tokenAddress)
 
     const address = this._wallet.address
 
-    const { stack } = await this._tonClient.callGetMethod(tokenAddress, 'get_wallet_address', [{
+    const { stack } = await this._tonClient.runMethod(tokenAddress, 'get_wallet_address', [{
       type: 'slice',
       cell: beginCell().storeAddress(address).endCell()
     }])
 
     const jettonWalletAddress = stack.readAddress()
 
+    await this._verifyJettonWallet(tokenAddress, jettonWalletAddress, { allowUndeployed })
+
     return jettonWalletAddress
+  }
+
+  /**
+   * Checks that an address is the account's wallet for the given jetton.
+   *
+   * @protected
+   * @param {Address} tokenAddress - The jetton master address.
+   * @param {Address} jettonWalletAddress - The jetton wallet address reported by the master.
+   * @param {{ allowUndeployed: boolean }} options - See {@link _getJettonWalletAddress}.
+   * @returns {Promise<void>}
+   * @throws {Error} If the address is not the account's wallet for this jetton.
+   */
+  async _verifyJettonWallet (tokenAddress, jettonWalletAddress, { allowUndeployed }) {
+    const invalidJettonWallet = 'The jetton master returned an invalid jetton wallet address.'
+
+    const { code } = await this._tonClient.getContractState(jettonWalletAddress)
+
+    if (!code) {
+      if (allowUndeployed) {
+        return
+      }
+
+      throw new Error('The account has no jetton wallet deployed for this token.')
+    }
+
+    const { stack: masterStack } = await this._tonClient.runMethod(tokenAddress, 'get_jetton_data', [])
+
+    // total_supply, mintable, admin_address, jetton_content, jetton_wallet_code
+    masterStack.skip(4)
+    const expectedCode = masterStack.readCell()
+
+    if (!Cell.fromBoc(code)[0].hash().equals(expectedCode.hash())) {
+      throw new Error(invalidJettonWallet)
+    }
+
+    const { stack: walletStack } = await this._tonClient.runMethod(jettonWalletAddress, 'get_wallet_data', [])
+
+    // balance, owner_address, jetton_master_address, jetton_wallet_code
+    walletStack.skip(1)
+    const owner = walletStack.readAddress()
+    const master = walletStack.readAddress()
+
+    if (!owner.equals(this._wallet.address) || !master.equals(tokenAddress)) {
+      throw new Error(invalidJettonWallet)
+    }
   }
 
   /**
@@ -526,16 +579,17 @@ export default class WalletAccountReadOnlyTon extends WalletAccountReadOnly {
    *
    * @protected
    * @param {TransferOptions} options - The transfer's options.
+   * @param {{ allowUndeployed?: boolean }} [options] - See {@link _getJettonWalletAddress}. Only set for quotes.
    * @returns {Promise<MessageRelaxed>} The internal message.
    */
-  async _getTokenTransferMessage ({ token, recipient, amount }) {
+  async _getTokenTransferMessage ({ token, recipient, amount }, { allowUndeployed = false } = {}) {
     recipient = Address.parse(recipient)
 
     const address = this._wallet.address
 
     const queryId = this._generateQueryId()
 
-    const jettonWalletAddress = await this._getJettonWalletAddress(token)
+    const jettonWalletAddress = await this._getJettonWalletAddress(token, { allowUndeployed })
 
     const body = beginCell()
       .storeUint(0x0f8a7ea5, 32)
