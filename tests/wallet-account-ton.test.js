@@ -649,7 +649,7 @@ describe('WalletAccountTon', () => {
         calculateQueryId(0.3, 0.4),
         calculateQueryId(0.5, 0.6)
       )
-      // Keep the chain's clock on the real time: 40 years of storage fees would freeze the jetton wallet.
+      // Mocking Date.now would otherwise age the chain and freeze the jetton wallet.
       blockchain.now = Math.floor(originalDateNow() / 1000)
       global.Date.now = jest.fn(() => 3_000_000_000_000)
 
